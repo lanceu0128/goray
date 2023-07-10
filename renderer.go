@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+	"fmt"
 	"math"
 	"github.com/fogleman/gg"
 )
@@ -23,22 +25,107 @@ type Sphere struct {
 	color Color
 }
 
+type Light interface {
+	GetIntensity() float64
+}
+
+type AmbientLight struct {
+	intensity float64
+}
+
+func (light AmbientLight) GetIntensity() float64 {
+	return light.intensity
+}
+
+type PointLight struct {
+	intensity float64
+	position Coords
+}
+
+func (light PointLight) GetIntensity() float64 {
+	return light.intensity
+}
+
+type DirectionalLight struct {
+	intensity float64
+	direction Coords
+}
+
+func (light DirectionalLight) GetIntensity() float64 {
+	return light.intensity
+}
+
 type Scene struct {
 	viewport_size [2]int
 	projection_plane_d int
 	spheres []Sphere 
+	lights []Light
 }
 
 const (
 	// Canvas Settings
-	C_Width float64 = 250
-	C_Height float64 = 250
+	C_Width float64 = 500
+	C_Height float64 = 500
 
 	// Viewport Settings
 	V_Height float64 = 1
 	V_Width float64 = 1
 	V_Dist float64 = 1
 )
+
+/* 
+	COORDINATE / VECTOR FUNCTIONS
+*/
+
+func Add(coords1, coords2 Coords) Coords {
+	coords := Coords{
+		x: coords1.x + coords2.x,
+		y: coords1.y + coords2.y,
+		z: coords1.z + coords2.z,
+	}
+	return coords
+}
+
+func Subtract(coords1, coords2 Coords) Coords {
+	coords := Coords{
+		x: coords1.x - coords2.x,
+		y: coords1.y - coords2.y,
+		z: coords1.z - coords2.z,
+	}
+	return coords
+}
+
+func Multiply(coords Coords, scalar float64) Coords {
+	result := Coords{
+		x: coords.x * scalar,
+		y: coords.y * scalar,
+		z: coords.z * scalar,
+	}
+	return result
+}
+
+func Divide(coords Coords, scalar float64) Coords {
+	result := Coords{
+		x: coords.x / scalar,
+		y: coords.y / scalar,
+		z: coords.z / scalar,
+	}
+	return result
+}
+
+func Dot(coords1, coords2 Coords) float64 {
+	dotProduct := coords1.x*coords2.x + coords1.y*coords2.y + coords1.z*coords2.z
+	return dotProduct
+}
+
+func Length(vec Coords) float64 {
+	magnitude := math.Sqrt((vec.x * vec.x) + (vec.y * vec.y) + (vec.z * vec.z))
+	return magnitude
+}
+
+/*
+	CANVAS / RAY TRACING OPERATIONS
+*/
 
 func DrawPixel(canvas *gg.Context, C_x float64, C_y float64, color Color) {
 	// Scene Coordinates
@@ -50,19 +137,13 @@ func DrawPixel(canvas *gg.Context, C_x float64, C_y float64, color Color) {
 	canvas.Fill()
 }
 
-func Subtract(coords1, coords2 Coords) Coords {
-	result := Coords{
-		x: coords1.x - coords2.x,
-		y: coords1.y - coords2.y,
-		z: coords1.z - coords2.z,
+func IntensifyColor(color Color, intensity float64) Color {
+	result := Color{
+		red: color.red * intensity,
+		green: color.green * intensity,
+		blue: color.blue * intensity,
 	}
-
 	return result
-}
-
-func Dot(coords1, coords2 Coords) float64 {
-	dotProduct := coords1.x*coords2.x + coords1.y*coords2.y + coords1.z*coords2.z
-	return dotProduct
 }
 
 func CanvasToViewPort(C_x, C_y float64) Coords {
@@ -93,10 +174,54 @@ func IntersectRaySphere(camera Coords, dir Coords, sphere Sphere) (float64, floa
 	return t1, t2
 }
 
+/*
+	Computes intensity at a certain point's color
+	- scene = 3D scene
+	- point = coordinates in 3D scene where light hits
+	- normal = unit vector perpendicular to the surface of point  
+*/
+func ComputeLighting(scene Scene, point Coords, normal Coords) float64 {
+	// intensity = multiplier given to color in rendering to simulate light
+	intensity := 0.00
+
+	for _, light := range scene.lights {
+		if ambient_light, ok := light.(AmbientLight); ok {
+			intensity += ambient_light.intensity
+		} else {
+			// light = directional vector of the incoming light ray
+			var light_vec Coords
+
+			if point_light, ok := light.(PointLight); ok {
+				light_vec = Subtract(point_light.position, point)
+			}
+			if directional_light, ok := light.(DirectionalLight); ok {
+				light_vec = directional_light.direction
+			}
+
+			n_dot_l := Dot(normal, light_vec)
+			// don't add negative values to intensity
+			if n_dot_l > 0 {
+				intensity += light.GetIntensity() * (n_dot_l / (Length(normal) * Length(light_vec)))
+			}
+		}
+	}
+
+	return intensity
+}
+
+/*
+	Performs calculations to return color based on a given direction
+	- scene = 3D scene containing objects
+	- camera = coordinates of the camera
+	- dir = coordinates of the direction being drawn based on X and Y coordinates
+	- t_min = minimum magnitude of vector extending from viewport
+	- t_max = maximum magnitude of vector extending from viewport
+*/
 func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min float64, t_max float64) Color {
 	t_closest := math.Inf(1)
 	var sphere_closest Sphere
 
+	// finds closest sphere by intersecting rays and spheres and finding minimum within bounds t_min and t_max
 	for _, sphere := range scene.spheres {
 		t1, t2 := IntersectRaySphere(camera, dir, sphere)
 
@@ -110,14 +235,27 @@ func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min floa
 		}
 	}
 
+	// checks for empty Sphere (null but Go doesn't have null)
 	if sphere_closest == (Sphere{}) {
 		return bg_color
 	}
 
-	return sphere_closest.color
+	// intensity calculations: 
+	
+	// point = coordinates in 3D scene where light hits (OOO unclear...)
+	point := Add(camera, Multiply(dir, t_closest))
+	// normal = unit vector perpendicular to the surface of point 
+	normal := Subtract(point, sphere_closest.center)
+	normal = Divide(normal, Length(normal))
+	// intensity = multiplier given to color in rendering to simulate light
+	intensity := ComputeLighting(scene, point, normal)
+
+	return IntensifyColor(sphere_closest.color, intensity)
 }
 
 func main() {
+	start := time.Now()
+
     canvas := gg.NewContext(int(C_Width), int(C_Height))
 
     // Set the background color
@@ -125,7 +263,6 @@ func main() {
 	canvas.Clear()
 
 	camera := Coords{0, 0, 0}
-
 	bg_color := Color{1, 1, 1}
 
 	scene := Scene {
@@ -135,6 +272,12 @@ func main() {
 			Sphere{center: Coords{0, -1, 3}, radius: 1, color: Color{1, 0, 0}},
 			Sphere{center: Coords{2, 0, 4}, radius: 1, color: Color{0, 0, 1}},
 			Sphere{center: Coords{-2, 0, 4}, radius: 1, color: Color{0, 1, 0}},
+			Sphere{center: Coords{0, -5001, 0}, radius: 5000, color: Color{1, 1, 0}},
+		},
+		lights: []Light{
+			AmbientLight{intensity: 0.2},
+			PointLight{intensity: 0.6, position: Coords{2, 1, 0}},
+			DirectionalLight{intensity: 0.2, direction: Coords{1, 4, 4}},
 		},
 	}
 
@@ -146,5 +289,9 @@ func main() {
 		} 
 	} 
 
-	canvas.SavePNG("img.png")
+	save_location := "img.png"
+	canvas.SavePNG(save_location)
+
+	elapsed := time.Since(start)
+	fmt.Printf("Image size: (%.0f, %.0f), Execution time: %s, Saved to: %s", C_Width, C_Height, elapsed, save_location)
 }
