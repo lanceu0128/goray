@@ -1,16 +1,17 @@
 package main
 
 import (
-	"time"
 	"fmt"
 	"math"
+	"time"
+
 	"github.com/fogleman/gg"
 )
 
 type Color struct {
-	red float64
+	red   float64
 	green float64
-	blue float64
+	blue  float64
 }
 
 type Coords struct {
@@ -20,9 +21,10 @@ type Coords struct {
 }
 
 type Sphere struct {
-	center Coords
-	radius float64
-	color Color
+	center   Coords
+	radius   float64
+	color    Color
+	specular float64 // fancy word for shininess
 }
 
 type Light interface {
@@ -39,7 +41,7 @@ func (light AmbientLight) GetIntensity() float64 {
 
 type PointLight struct {
 	intensity float64
-	position Coords
+	position  Coords
 }
 
 func (light PointLight) GetIntensity() float64 {
@@ -56,24 +58,24 @@ func (light DirectionalLight) GetIntensity() float64 {
 }
 
 type Scene struct {
-	viewport_size [2]int
+	viewport_size      [2]int
 	projection_plane_d int
-	spheres []Sphere 
-	lights []Light
+	spheres            []Sphere
+	lights             []Light
 }
 
 const (
 	// Canvas Settings
-	C_Width float64 = 500
+	C_Width  float64 = 500
 	C_Height float64 = 500
 
 	// Viewport Settings
 	V_Height float64 = 1
-	V_Width float64 = 1
-	V_Dist float64 = 1
+	V_Width  float64 = 1
+	V_Dist   float64 = 1
 )
 
-/* 
+/*
 	COORDINATE / VECTOR FUNCTIONS
 */
 
@@ -123,27 +125,43 @@ func Length(vec Coords) float64 {
 	return magnitude
 }
 
+func IntensifyColor(color Color, intensity float64) Color {
+	result := Color{
+		red:   color.red * intensity,
+		green: color.green * intensity,
+		blue:  color.blue * intensity,
+	}
+	return result
+}
+
+func NormalizeColor(color Color) (float64, float64, float64) {
+	// all colors "intensified" after 255 need to be flattened to 255 for proper rendering
+	if color.red > 255 {
+		color.red = 255
+	}
+	if color.green > 255 {
+		color.green = 255
+	}
+	if color.blue > 255 {
+		color.blue = 255
+	}
+
+	// graphics library requires color channel values to be from 0-1
+	return color.red / 255, color.green / 255, color.blue / 255
+}
+
 /*
 	CANVAS / RAY TRACING OPERATIONS
 */
 
 func DrawPixel(canvas *gg.Context, C_x float64, C_y float64, color Color) {
 	// Scene Coordinates
-	S_x := (C_Width / 2) + C_x 
-	S_y := (C_Height / 2) - C_y 
+	S_x := (C_Width / 2) + C_x
+	S_y := (C_Height / 2) - C_y
 
-	canvas.SetRGB(color.red, color.green, color.blue)
-	canvas.DrawPoint(S_x, S_y, 1) 
+	canvas.SetRGB(NormalizeColor(color))
+	canvas.DrawPoint(S_x, S_y, 1)
 	canvas.Fill()
-}
-
-func IntensifyColor(color Color, intensity float64) Color {
-	result := Color{
-		red: color.red * intensity,
-		green: color.green * intensity,
-		blue: color.blue * intensity,
-	}
-	return result
 }
 
 func CanvasToViewPort(C_x, C_y float64) Coords {
@@ -158,29 +176,29 @@ func IntersectRaySphere(camera Coords, dir Coords, sphere Sphere) (float64, floa
 	rad := sphere.radius
 	dist := Subtract(camera, sphere.center)
 
-	a := Dot(dir, dir)	
+	a := Dot(dir, dir)
 	b := 2 * Dot(dist, dir)
 	c := Dot(dist, dist) - (rad * rad)
 
-	discriminant := (b*b) - (4*a*c)
+	discriminant := (b * b) - (4 * a * c)
 
 	if discriminant < 0 {
 		return math.Inf(1), math.Inf(1)
 	}
 
-	t1 := (-b + math.Sqrt(discriminant)) / (2*a)
-	t2 := (-b - math.Sqrt(discriminant)) / (2*a)
+	t1 := (-b + math.Sqrt(discriminant)) / (2 * a)
+	t2 := (-b - math.Sqrt(discriminant)) / (2 * a)
 
 	return t1, t2
 }
 
 /*
-	Computes intensity at a certain point's color
-	- scene = 3D scene
-	- point = coordinates in 3D scene where light hits
-	- normal = unit vector perpendicular to the surface of point  
+Computes intensity at a certain point's color
+- scene = 3D scene
+- point = coordinates in 3D scene where light hits
+- normal = unit vector perpendicular to the surface of point
 */
-func ComputeLighting(scene Scene, point Coords, normal Coords) float64 {
+func ComputeLighting(scene Scene, point Coords, normal Coords, view Coords, specularity float64) float64 {
 	// intensity = multiplier given to color in rendering to simulate light
 	intensity := 0.00
 
@@ -193,29 +211,37 @@ func ComputeLighting(scene Scene, point Coords, normal Coords) float64 {
 
 			if point_light, ok := light.(PointLight); ok {
 				light_vec = Subtract(point_light.position, point)
-			}
-			if directional_light, ok := light.(DirectionalLight); ok {
+			} else if directional_light, ok := light.(DirectionalLight); ok {
 				light_vec = directional_light.direction
 			}
 
+			// DIFFUSE REFLECTION CALCULATION
 			n_dot_l := Dot(normal, light_vec)
 			// don't add negative values to intensity
 			if n_dot_l > 0 {
 				intensity += light.GetIntensity() * (n_dot_l / (Length(normal) * Length(light_vec)))
 			}
+
+			// SPECULAR REFLECTION CALCULATION
+			if specularity != -1 {
+				reflection := Subtract(Multiply(normal, Dot(normal, light_vec)*2), light_vec)
+				r_dot_v := Dot(reflection, view)
+				if r_dot_v > 0 {
+					intensity += light.GetIntensity() * math.Pow(r_dot_v/(Length(reflection)*Length(view)), specularity)
+				}
+			}
 		}
 	}
-
 	return intensity
 }
 
 /*
-	Performs calculations to return color based on a given direction
-	- scene = 3D scene containing objects
-	- camera = coordinates of the camera
-	- dir = coordinates of the direction being drawn based on X and Y coordinates
-	- t_min = minimum magnitude of vector extending from viewport
-	- t_max = maximum magnitude of vector extending from viewport
+Performs calculations to return color based on a given direction
+- scene = 3D scene containing objects
+- camera = coordinates of the camera
+- dir = coordinates of the direction being drawn based on X and Y coordinates
+- t_min = minimum magnitude of vector extending from viewport
+- t_max = maximum magnitude of vector extending from viewport
 */
 func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min float64, t_max float64) Color {
 	t_closest := math.Inf(1)
@@ -240,39 +266,39 @@ func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min floa
 		return bg_color
 	}
 
-	// intensity calculations: 
-	
+	// intensity calculations:
+
 	// point = coordinates in 3D scene where light hits (OOO unclear...)
 	point := Add(camera, Multiply(dir, t_closest))
-	// normal = unit vector perpendicular to the surface of point 
+	// normal = unit vector perpendicular to the surface of point
 	normal := Subtract(point, sphere_closest.center)
 	normal = Divide(normal, Length(normal))
-	// intensity = multiplier given to color in rendering to simulate light
-	intensity := ComputeLighting(scene, point, normal)
 
+	// intensity = multiplier given to color in rendering to simulate light
+	intensity := ComputeLighting(scene, point, normal, Multiply(dir, -1), sphere_closest.specular)
 	return IntensifyColor(sphere_closest.color, intensity)
 }
 
 func main() {
 	start := time.Now()
 
-    canvas := gg.NewContext(int(C_Width), int(C_Height))
+	canvas := gg.NewContext(int(C_Width), int(C_Height))
 
-    // Set the background color
+	// Set the background color
 	canvas.SetRGB(0, 0, 0) // black
 	canvas.Clear()
 
 	camera := Coords{0, 0, 0}
-	bg_color := Color{1, 1, 1}
+	bg_color := Color{255, 255, 255}
 
-	scene := Scene {
-		viewport_size: [2]int{1, 1},
+	scene := Scene{
+		viewport_size:      [2]int{1, 1},
 		projection_plane_d: 100,
 		spheres: []Sphere{
-			Sphere{center: Coords{0, -1, 3}, radius: 1, color: Color{1, 0, 0}},
-			Sphere{center: Coords{2, 0, 4}, radius: 1, color: Color{0, 0, 1}},
-			Sphere{center: Coords{-2, 0, 4}, radius: 1, color: Color{0, 1, 0}},
-			Sphere{center: Coords{0, -5001, 0}, radius: 5000, color: Color{1, 1, 0}},
+			{center: Coords{0, -1, 3}, radius: 1, color: Color{255, 0, 0}, specular: 500},
+			{center: Coords{2, 0, 4}, radius: 1, color: Color{0, 0, 255}, specular: 500},
+			{center: Coords{-2, 0, 4}, radius: 1, color: Color{0, 255, 0}, specular: 10},
+			{center: Coords{0, -5001, 0}, radius: 5000, color: Color{255, 255, 0}, specular: 1000},
 		},
 		lights: []Light{
 			AmbientLight{intensity: 0.2},
@@ -281,13 +307,13 @@ func main() {
 		},
 	}
 
-	for x := - (C_Width / 2); x < (C_Width / 2); x++ {
-		for y := - (C_Height / 2); y < (C_Height / 2); y++ {
+	for x := -(C_Width / 2); x < (C_Width / 2); x++ {
+		for y := -(C_Height / 2); y < (C_Height / 2); y++ {
 			dir := CanvasToViewPort(x, y)
-			color := TraceRay(bg_color, scene, camera, dir, 1, math.Inf(1))	
+			color := TraceRay(bg_color, scene, camera, dir, 1, math.Inf(1))
 			DrawPixel(canvas, x, y, color)
-		} 
-	} 
+		}
+	}
 
 	save_location := "img.png"
 	canvas.SavePNG(save_location)
