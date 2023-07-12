@@ -21,10 +21,11 @@ type Coords struct {
 }
 
 type Sphere struct {
-	center   Coords
-	radius   float64
-	color    Color
-	specular float64 // fancy word for shininess
+	center     Coords
+	radius     float64
+	color      Color
+	specular   float64 // fancy word for shininess
+	reflective float64
 }
 
 type Light interface {
@@ -73,6 +74,8 @@ const (
 	V_Height float64 = 1
 	V_Width  float64 = 1
 	V_Dist   float64 = 1
+
+	Recursion_Depth int = 3 // determines how many iterations of recursion are used for reflection
 )
 
 /*
@@ -134,6 +137,15 @@ func IntensifyColor(color Color, intensity float64) Color {
 	return result
 }
 
+func AddColor(color1, color2 Color) Color {
+	result := Color{
+		red:   color1.red + color2.red,
+		green: color1.green + color2.green,
+		blue:  color1.blue + color2.blue,
+	}
+	return result
+}
+
 func NormalizeColor(color Color) (float64, float64, float64) {
 	// all colors "intensified" after 255 need to be flattened to 255 for proper rendering
 	if color.red > 255 {
@@ -148,6 +160,10 @@ func NormalizeColor(color Color) (float64, float64, float64) {
 
 	// graphics library requires color channel values to be from 0-1
 	return color.red / 255, color.green / 255, color.blue / 255
+}
+
+func ReflectRay(ray, normal Coords) Coords {
+	return Subtract(Multiply(normal, Dot(normal, ray)*2), ray)
 }
 
 /*
@@ -201,6 +217,7 @@ Computes intensity at a certain point's color
 func ComputeLighting(scene Scene, point Coords, normal Coords, view Coords, specularity float64) float64 {
 	// intensity = multiplier given to color in rendering to simulate light
 	intensity := 0.00
+	var t_max float64
 
 	for _, light := range scene.lights {
 		if ambient_light, ok := light.(AmbientLight); ok {
@@ -211,20 +228,28 @@ func ComputeLighting(scene Scene, point Coords, normal Coords, view Coords, spec
 
 			if point_light, ok := light.(PointLight); ok {
 				light_vec = Subtract(point_light.position, point)
+				t_max = 1
 			} else if directional_light, ok := light.(DirectionalLight); ok {
 				light_vec = directional_light.direction
+				t_max = math.Inf(1)
 			}
 
-			// DIFFUSE REFLECTION CALCULATION
+			// SHADOW CHECK (skip reflections if shadow is being cased on point)
+			sphere_shadow, _ := ClosestIntersection(scene, point, light_vec, 0.001, t_max)
+			if sphere_shadow != (Sphere{}) {
+				continue
+			}
+
+			// DIFFUSE REFLECTION (reflection for matte objects) CALCULATION
 			n_dot_l := Dot(normal, light_vec)
 			// don't add negative values to intensity
 			if n_dot_l > 0 {
 				intensity += light.GetIntensity() * (n_dot_l / (Length(normal) * Length(light_vec)))
 			}
 
-			// SPECULAR REFLECTION CALCULATION
+			// SPECULAR REFLECTION (reflection for shiny objects) CALCULATION
 			if specularity != -1 {
-				reflection := Subtract(Multiply(normal, Dot(normal, light_vec)*2), light_vec)
+				reflection := ReflectRay(light_vec, normal)
 				r_dot_v := Dot(reflection, view)
 				if r_dot_v > 0 {
 					intensity += light.GetIntensity() * math.Pow(r_dot_v/(Length(reflection)*Length(view)), specularity)
@@ -236,14 +261,14 @@ func ComputeLighting(scene Scene, point Coords, normal Coords, view Coords, spec
 }
 
 /*
-Performs calculations to return color based on a given direction
+Find the intersections between the camera and objects in a certain direction
 - scene = 3D scene containing objects
 - camera = coordinates of the camera
 - dir = coordinates of the direction being drawn based on X and Y coordinates
 - t_min = minimum magnitude of vector extending from viewport
 - t_max = maximum magnitude of vector extending from viewport
 */
-func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min float64, t_max float64) Color {
+func ClosestIntersection(scene Scene, camera Coords, dir Coords, t_min float64, t_max float64) (Sphere, float64) {
 	t_closest := math.Inf(1)
 	var sphere_closest Sphere
 
@@ -261,22 +286,47 @@ func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min floa
 		}
 	}
 
+	return sphere_closest, t_closest
+}
+
+/*
+Performs calculations to return color based on a given direction
+- scene = 3D scene containing objects
+- camera = coordinates of the camera
+- dir = coordinates of the direction being drawn based on X and Y coordinates
+- t_min = minimum magnitude of vector extending from viewport
+- t_max = maximum magnitude of vector extending from viewport
+*/
+func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min float64, t_max float64, recursion_depth int) Color {
+
+	sphere_closest, t_closest := ClosestIntersection(scene, camera, dir, t_min, t_max)
+
 	// checks for empty Sphere (null but Go doesn't have null)
 	if sphere_closest == (Sphere{}) {
 		return bg_color
 	}
 
-	// intensity calculations:
+	// INTENSITY CALCULATIONS:
 
 	// point = coordinates in 3D scene where light hits (OOO unclear...)
 	point := Add(camera, Multiply(dir, t_closest))
 	// normal = unit vector perpendicular to the surface of point
 	normal := Subtract(point, sphere_closest.center)
 	normal = Divide(normal, Length(normal))
-
-	// intensity = multiplier given to color in rendering to simulate light
 	intensity := ComputeLighting(scene, point, normal, Multiply(dir, -1), sphere_closest.specular)
-	return IntensifyColor(sphere_closest.color, intensity)
+	local_color := IntensifyColor(sphere_closest.color, intensity)
+
+	// REFLECTION CALCULATIONS:
+
+	reflective := sphere_closest.reflective
+	if recursion_depth <= 0 || reflective <= 0 { // base case
+		return local_color
+	}
+
+	ray := ReflectRay(Multiply(dir, -1), normal)
+	reflected_color := TraceRay(bg_color, scene, point, ray, 0.001, math.Inf(1), recursion_depth-1) // recursive case
+
+	return AddColor(IntensifyColor(local_color, 1-reflective), IntensifyColor(reflected_color, reflective))
 }
 
 func main() {
@@ -289,16 +339,16 @@ func main() {
 	canvas.Clear()
 
 	camera := Coords{0, 0, 0}
-	bg_color := Color{255, 255, 255}
+	bg_color := Color{0, 0, 0}
 
 	scene := Scene{
 		viewport_size:      [2]int{1, 1},
 		projection_plane_d: 100,
 		spheres: []Sphere{
-			{center: Coords{0, -1, 3}, radius: 1, color: Color{255, 0, 0}, specular: 500},
-			{center: Coords{2, 0, 4}, radius: 1, color: Color{0, 0, 255}, specular: 500},
-			{center: Coords{-2, 0, 4}, radius: 1, color: Color{0, 255, 0}, specular: 10},
-			{center: Coords{0, -5001, 0}, radius: 5000, color: Color{255, 255, 0}, specular: 1000},
+			{center: Coords{0, -1, 3}, radius: 1, color: Color{255, 0, 0}, specular: 500, reflective: 0.2},
+			{center: Coords{2, 0, 4}, radius: 1, color: Color{0, 0, 255}, specular: 500, reflective: 0.3},
+			{center: Coords{-2, 0, 4}, radius: 1, color: Color{0, 255, 0}, specular: 10, reflective: 0.4},
+			{center: Coords{0, -5001, 0}, radius: 5000, color: Color{255, 255, 0}, specular: 1000, reflective: 0.5},
 		},
 		lights: []Light{
 			AmbientLight{intensity: 0.2},
@@ -310,7 +360,7 @@ func main() {
 	for x := -(C_Width / 2); x < (C_Width / 2); x++ {
 		for y := -(C_Height / 2); y < (C_Height / 2); y++ {
 			dir := CanvasToViewPort(x, y)
-			color := TraceRay(bg_color, scene, camera, dir, 1, math.Inf(1))
+			color := TraceRay(bg_color, scene, camera, dir, 1, math.Inf(1), Recursion_Depth)
 			DrawPixel(canvas, x, y, color)
 		}
 	}
