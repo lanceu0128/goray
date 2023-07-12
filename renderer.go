@@ -65,6 +65,11 @@ type Scene struct {
 	lights             []Light
 }
 
+type Camera struct {
+	position        Coords
+	rotation_matrix [3][3]float64 // fancy matrix multiplication stuff that lets you rotate the view
+}
+
 const (
 	// Canvas Settings
 	C_Width  float64 = 500
@@ -101,21 +106,21 @@ func Subtract(coords1, coords2 Coords) Coords {
 }
 
 func Multiply(coords Coords, scalar float64) Coords {
-	result := Coords{
+	new_coords := Coords{
 		x: coords.x * scalar,
 		y: coords.y * scalar,
 		z: coords.z * scalar,
 	}
-	return result
+	return new_coords
 }
 
 func Divide(coords Coords, scalar float64) Coords {
-	result := Coords{
+	new_coords := Coords{
 		x: coords.x / scalar,
 		y: coords.y / scalar,
 		z: coords.z / scalar,
 	}
-	return result
+	return new_coords
 }
 
 func Dot(coords1, coords2 Coords) float64 {
@@ -126,6 +131,15 @@ func Dot(coords1, coords2 Coords) float64 {
 func Length(vec Coords) float64 {
 	magnitude := math.Sqrt((vec.x * vec.x) + (vec.y * vec.y) + (vec.z * vec.z))
 	return magnitude
+}
+
+func MultiplyMatrixVector(matrix [3][3]float64, vec Coords) Coords {
+	new_coords := Coords{
+		x: (vec.x * matrix[0][0]) + (vec.y * matrix[0][1]) + (vec.z * matrix[0][2]),
+		y: (vec.x * matrix[1][0]) + (vec.y * matrix[1][1]) + (vec.z * matrix[1][2]),
+		z: (vec.x * matrix[2][0]) + (vec.y * matrix[2][1]) + (vec.z * matrix[2][2]),
+	}
+	return new_coords
 }
 
 func IntensifyColor(color Color, intensity float64) Color {
@@ -338,7 +352,14 @@ func main() {
 	canvas.SetRGB(0, 0, 0) // black
 	canvas.Clear()
 
-	camera := Coords{0, 0, 0}
+	camera := Camera{
+		rotation_matrix: [3][3]float64{
+			{1, 0, 0},
+			{0, 1, 0},
+			{0, 0, 1},
+		},
+		position: Coords{0, 0, 0},
+	}
 	bg_color := Color{0, 0, 0}
 
 	scene := Scene{
@@ -359,8 +380,8 @@ func main() {
 
 	for x := -(C_Width / 2); x < (C_Width / 2); x++ {
 		for y := -(C_Height / 2); y < (C_Height / 2); y++ {
-			dir := CanvasToViewPort(x, y)
-			color := TraceRay(bg_color, scene, camera, dir, 1, math.Inf(1), Recursion_Depth)
+			dir := MultiplyMatrixVector(camera.rotation_matrix, CanvasToViewPort(x, y))
+			color := TraceRay(bg_color, scene, camera.position, dir, 1, math.Inf(1), Recursion_Depth)
 			DrawPixel(canvas, x, y, color)
 		}
 	}
