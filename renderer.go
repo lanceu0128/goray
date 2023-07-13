@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"image"
+	img_color "image/color"
+	"image/png"
 	"math"
+	"os"
 	"sync"
 	"time"
-
-	"github.com/fogleman/gg"
 )
 
 type Color struct {
@@ -175,7 +177,7 @@ func AddColor(color1, color2 Color) Color {
 	return result
 }
 
-func NormalizeColor(color Color) (float64, float64, float64) {
+func NormalizeColor(color Color) Color {
 	// all colors "intensified" after 255 need to be flattened to 255 for proper rendering
 	if color.red > 255 {
 		color.red = 255
@@ -188,7 +190,7 @@ func NormalizeColor(color Color) (float64, float64, float64) {
 	}
 
 	// graphics library requires color channel values to be from 0-1
-	return color.red / 255, color.green / 255, color.blue / 255
+	return Color{color.red, color.green, color.blue}
 }
 
 func ReflectRay(ray, normal Coords) Coords {
@@ -199,14 +201,18 @@ func ReflectRay(ray, normal Coords) Coords {
 	CANVAS / RAY TRACING OPERATIONS
 */
 
-func DrawPixel(canvas *gg.Context, C_x float64, C_y float64, color Color) {
+func DrawPixel(canvas *image.RGBA, C_x float64, C_y float64, color Color) {
 	// Scene Coordinates
 	S_x := (C_Width / 2) + C_x
 	S_y := (C_Height / 2) - C_y
 
-	canvas.SetRGB(NormalizeColor(color))
-	canvas.DrawPoint(S_x, S_y, 1)
-	canvas.Fill()
+	normal_color := NormalizeColor(color)
+
+	canvas.Set(int(S_x), int(S_y), img_color.RGBA{R: uint8(normal_color.red), G: uint8(normal_color.green), B: uint8(normal_color.blue), A: 255})
+
+	// canvas.SetRGB(NormalizeColor(color))
+	// canvas.DrawPoint(S_x, S_y, 1)
+	// canvas.Fill()
 }
 
 func CanvasToViewPort(C_x, C_y float64) Coords {
@@ -361,11 +367,13 @@ func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min floa
 func main() {
 	start := time.Now()
 
-	canvas := gg.NewContext(int(C_Width), int(C_Height))
+	// canvas := gg.NewContext(int(C_Width), int(C_Height))
+
+	canvas := image.NewRGBA(image.Rect(0, 0, int(C_Width), int(C_Height)))
 
 	// Set the background color
-	canvas.SetRGB(0, 0, 0) // black
-	canvas.Clear()
+	// canvas.SetRGB(0, 0, 0) // black
+	// canvas.Clear()
 
 	camera := Camera{
 		rotation_matrix: [3][3]float64{
@@ -439,6 +447,7 @@ func main() {
 				Y:     ray.Y,
 				color: color,
 			}
+
 			// fmt.Printf("\n\nSetting color at (%f, %f) as (%f, %f, %f)", ray.X, ray.Y, color.red, color.green, color.blue)
 		}
 
@@ -450,6 +459,7 @@ func main() {
 
 		for color := range color_chan {
 			// fmt.Printf("\n\nDrawing pixel at (%f, %f) as (%f, %f, %f)", color.X, color.Y, color.color.red, color.color.green, color.color.blue)
+
 			DrawPixel(canvas, color.X, color.Y, color.color)
 		}
 	}(color_chan)
@@ -457,8 +467,14 @@ func main() {
 	wg.Wait()
 
 	save_location := "img.png"
-	canvas.SavePNG(save_location)
+	file, err := os.Create("img.png")
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	png.Encode(file, canvas)
 
 	elapsed := time.Since(start)
-	fmt.Printf("Image size: (%.0f, %.0f), Execution time: %s, Saved to: %s", C_Width, C_Height, elapsed, save_location)
+	fmt.Printf("Image size: %.0fx%.0f, Execution time: %s, Saved to: %s", C_Width, C_Height, elapsed, save_location)
 }
