@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/fogleman/gg"
@@ -18,6 +19,18 @@ type Coords struct {
 	x float64
 	y float64
 	z float64
+}
+
+type RayMap struct { // for use to send ray and matching XY coordinates through channels in one
+	X   float64
+	Y   float64
+	ray Coords
+}
+
+type ColorMap struct { // for use to send colro and matching XY coordinates through channels in one
+	X     float64
+	Y     float64
+	color Color
 }
 
 type Sphere struct {
@@ -72,8 +85,8 @@ type Camera struct {
 
 const (
 	// Canvas Settings
-	C_Width  float64 = 500
-	C_Height float64 = 500
+	C_Width  float64 = 1920
+	C_Height float64 = 1080
 
 	// Viewport Settings
 	V_Height float64 = 1
@@ -82,6 +95,8 @@ const (
 
 	Recursion_Depth int = 3 // determines how many iterations of recursion are used for reflection
 )
+
+var inf = math.Inf(1)
 
 /*
 	COORDINATE / VECTOR FUNCTIONS
@@ -213,7 +228,7 @@ func IntersectRaySphere(camera Coords, dir Coords, sphere Sphere) (float64, floa
 	discriminant := (b * b) - (4 * a * c)
 
 	if discriminant < 0 {
-		return math.Inf(1), math.Inf(1)
+		return inf, inf
 	}
 
 	t1 := (-b + math.Sqrt(discriminant)) / (2 * a)
@@ -245,7 +260,7 @@ func ComputeLighting(scene Scene, point Coords, normal Coords, view Coords, spec
 				t_max = 1
 			} else if directional_light, ok := light.(DirectionalLight); ok {
 				light_vec = directional_light.direction
-				t_max = math.Inf(1)
+				t_max = inf
 			}
 
 			// SHADOW CHECK (skip reflections if shadow is being cased on point)
@@ -283,7 +298,7 @@ Find the intersections between the camera and objects in a certain direction
 - t_max = maximum magnitude of vector extending from viewport
 */
 func ClosestIntersection(scene Scene, camera Coords, dir Coords, t_min float64, t_max float64) (Sphere, float64) {
-	t_closest := math.Inf(1)
+	t_closest := inf
 	var sphere_closest Sphere
 
 	// finds closest sphere by intersecting rays and spheres and finding minimum within bounds t_min and t_max
@@ -338,7 +353,7 @@ func TraceRay(bg_color Color, scene Scene, camera Coords, dir Coords, t_min floa
 	}
 
 	ray := ReflectRay(Multiply(dir, -1), normal)
-	reflected_color := TraceRay(bg_color, scene, point, ray, 0.001, math.Inf(1), recursion_depth-1) // recursive case
+	reflected_color := TraceRay(bg_color, scene, point, ray, 0.001, inf, recursion_depth-1) // recursive case
 
 	return AddColor(IntensifyColor(local_color, 1-reflective), IntensifyColor(reflected_color, reflective))
 }
@@ -378,13 +393,68 @@ func main() {
 		},
 	}
 
-	for x := -(C_Width / 2); x < (C_Width / 2); x++ {
-		for y := -(C_Height / 2); y < (C_Height / 2); y++ {
-			dir := MultiplyMatrixVector(camera.rotation_matrix, CanvasToViewPort(x, y))
-			color := TraceRay(bg_color, scene, camera.position, dir, 1, math.Inf(1), Recursion_Depth)
-			DrawPixel(canvas, x, y, color)
+	// ORIGINAL CODE:
+	// for x := -(C_Width / 2); x < (C_Width / 2); x++ {
+	// 	for y := -(C_Height / 2); y < (C_Height / 2); y++ {
+	// 		dir := MultiplyMatrixVector(camera.rotation_matrix, CanvasToViewPort(x, y))
+	// 		color := TraceRay(bg_color, scene, camera.position, dir, 1, inf, Recursion_Depth)
+	// 		DrawPixel(canvas, x, y, color)
+	// 	}
+	// }
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	ray_chan := make(chan RayMap, int(C_Width*C_Height))
+	color_chan := make(chan ColorMap, int(C_Width*C_Height))
+
+	go func(ray_chan chan RayMap) {
+		defer wg.Done()
+
+		for x := -(C_Width / 2); x < (C_Width / 2); x++ {
+			for y := -(C_Height / 2); y < (C_Height / 2); y++ {
+				ray := MultiplyMatrixVector(camera.rotation_matrix, CanvasToViewPort(x, y))
+
+				ray_chan <- RayMap{
+					X:   x,
+					Y:   y,
+					ray: ray,
+				}
+
+				// fmt.Printf("\n\nSetting ray of (%f, %f) to hit (%f, %f, %f)", x, y, ray.x, ray.y, ray.z)
+			}
 		}
-	}
+
+		close(ray_chan)
+	}(ray_chan)
+
+	go func(ray_chan chan RayMap, color_chan chan ColorMap) {
+		defer wg.Done()
+
+		for ray := range ray_chan {
+			color := TraceRay(bg_color, scene, camera.position, ray.ray, 1, inf, Recursion_Depth)
+
+			color_chan <- ColorMap{
+				X:     ray.X,
+				Y:     ray.Y,
+				color: color,
+			}
+			// fmt.Printf("\n\nSetting color at (%f, %f) as (%f, %f, %f)", ray.X, ray.Y, color.red, color.green, color.blue)
+		}
+
+		close(color_chan)
+	}(ray_chan, color_chan)
+
+	go func(color_chan chan ColorMap) {
+		defer wg.Done()
+
+		for color := range color_chan {
+			// fmt.Printf("\n\nDrawing pixel at (%f, %f) as (%f, %f, %f)", color.X, color.Y, color.color.red, color.color.green, color.color.blue)
+			DrawPixel(canvas, color.X, color.Y, color.color)
+		}
+	}(color_chan)
+
+	wg.Wait()
 
 	save_location := "img.png"
 	canvas.SavePNG(save_location)
