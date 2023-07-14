@@ -6,4 +6,4 @@ Example output image, with cel shading:
 
 ![final](https://github.com/lanceu0128/goray/assets/81938513/988f09c0-b6ed-4d7c-96bc-d623c1577abb)
 
-Very heavily based on the first chapter of: https://gabrielgambetta.com/computer-graphics-from-scratch/   
+Very heavily based on the first chapter of: https://gabrielgambetta.com/computer-graphics-from-scratch/, as well as https://www.cs.rpi.edu/~cutler/classes/advancedgraphics/S17/final_projects/amy_toshi.pdf and https://www.youtube.com/watch?v=uihBwtPIBxM&t=65s
