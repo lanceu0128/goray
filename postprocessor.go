@@ -16,23 +16,6 @@ type MatrixMap struct { // used by matrix channel to link X and Y coordinates to
 	matrix [3][3]uint8
 }
 
-func Convolution(matrix [3][3]uint8, gradient [3][3]int) int {
-	var result int
-	for i := 0; i < 3; i++ {
-		for j := 0; j < 3; j++ {
-			result += int(matrix[i][j]) * gradient[i][j] // get sum of products of each matrix[i][j]
-		}
-	}
-
-	if result < 0 {
-		result = 0
-	} else if result > 50 {
-		result = 255
-	}
-
-	return result
-}
-
 func SobelKernel(matrix [3][3]uint8) float64 {
 	Gradient_X := [3][3]int{ // used to convolute image and find X edge
 		{-1, 0, 1},
@@ -117,6 +100,10 @@ func EdgeDetection(canvas *image.RGBA) {
 			final_canvas.SetRGBA(x, y, newColor)
 		}
 	}
+
+	SaveGrayPNG("gray.png", gray_canvas)
+	SaveGrayPNG("edges.png", edge_canvas)
+	SavePNG("final.png", final_canvas)
 
 	save_location := "out_edges.png"
 	file_to_save := final_canvas
