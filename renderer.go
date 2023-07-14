@@ -87,7 +87,7 @@ type Camera struct {
 
 const (
 	// Canvas Settings
-	C_Width  float64 = 1920
+	C_Width  float64 = 1080
 	C_Height float64 = 1080
 
 	// Viewport Settings
@@ -95,7 +95,9 @@ const (
 	V_Width  float64 = 1
 	V_Dist   float64 = 1
 
-	Recursion_Depth int = 3 // determines how many iterations of recursion are used for reflection
+	Recursion_Depth int = 1 // determines how many iterations of recursion are used for reflection
+
+	Intensity_Threshold float64 = 1.2 // threshold used to discretize colors for cel shading
 )
 
 var inf = math.Inf(1)
@@ -193,13 +195,13 @@ func NormalizeColor(color Color) Color {
 	return Color{color.red, color.green, color.blue}
 }
 
-func ReflectRay(ray, normal Coords) Coords {
-	return Subtract(Multiply(normal, Dot(normal, ray)*2), ray)
-}
-
 /*
 	CANVAS / RAY TRACING OPERATIONS
 */
+
+func ReflectRay(ray, normal Coords) Coords {
+	return Subtract(Multiply(normal, Dot(normal, ray)*2), ray)
+}
 
 func DrawPixel(canvas *image.RGBA, C_x float64, C_y float64, color Color) {
 	// Scene Coordinates
@@ -292,6 +294,18 @@ func ComputeLighting(scene Scene, point Coords, normal Coords, view Coords, spec
 			}
 		}
 	}
+
+	// weight intensity against thresholds to quantize colors; creating "cell" shading
+	if intensity > Intensity_Threshold*0.95 {
+		intensity = Intensity_Threshold * 0.95
+	} else if intensity > Intensity_Threshold*0.50 {
+		intensity = Intensity_Threshold * 0.50
+	} else if intensity > Intensity_Threshold*0.30 {
+		intensity = Intensity_Threshold * 0.30
+	} else {
+		intensity = Intensity_Threshold * 0.05
+	}
+
 	return intensity
 }
 
@@ -383,16 +397,16 @@ func main() {
 		},
 		position: Coords{0, 0, 0},
 	}
-	bg_color := Color{0, 0, 0}
+	bg_color := Color{255, 255, 255}
 
 	scene := Scene{
 		viewport_size:      [2]int{1, 1},
 		projection_plane_d: 100,
 		spheres: []Sphere{
-			{center: Coords{0, -1, 3}, radius: 1, color: Color{255, 0, 0}, specular: 500, reflective: 0.2},
-			{center: Coords{2, 0, 4}, radius: 1, color: Color{0, 0, 255}, specular: 500, reflective: 0.3},
-			{center: Coords{-2, 0, 4}, radius: 1, color: Color{0, 255, 0}, specular: 10, reflective: 0.4},
-			{center: Coords{0, -5001, 0}, radius: 5000, color: Color{255, 255, 0}, specular: 1000, reflective: 0.5},
+			{center: Coords{0, -1, 3}, radius: 1, color: Color{255, 0, 0}, specular: 250, reflective: 0},
+			{center: Coords{2, 0, 4}, radius: 1, color: Color{0, 0, 255}, specular: 250, reflective: 0.25},
+			{center: Coords{-2, 0, 4}, radius: 1, color: Color{0, 255, 0}, specular: 5, reflective: 0},
+			{center: Coords{0, -5001, 0}, radius: 5000, color: Color{255, 255, 0}, specular: 500, reflective: 0},
 		},
 		lights: []Light{
 			AmbientLight{intensity: 0.2},
@@ -465,6 +479,8 @@ func main() {
 	}(color_chan)
 
 	wg.Wait()
+
+	// EdgeDetection(canvas) // post processing to add image edges for cel shading
 
 	save_location := "img.png"
 	file, err := os.Create("img.png")
